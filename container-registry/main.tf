@@ -15,7 +15,8 @@ provider "aws" {
   region = var.region
 }
 
-resource "aws_ecr_repository" "r0m4n" {
-  name                 = "r0m4n.com"
+# One repository points to one image. ECR is a flat hierarchy.
+resource "aws_ecr_repository" "fake_data" {
+  name                 = "r0m4n.com/fake-data-api"
   image_tag_mutability = "MUTABLE"
 }
