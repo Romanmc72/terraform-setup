@@ -21,16 +21,24 @@ provider "aws" {
 ######################################
 
 # Function itself
-resource "aws_lambda_function" "fake_data" {
-  function_name = "fake-data-api"
+resource "aws_lambda_function" "lambda_function" {
+  function_name = var.app_name
   package_type  = "Image"
-  image_uri     = "${var.account_id}.dkr.ecr.us-east-1.amazonaws.com/r0m4n.com/fake-data-api:0.0.12"
+  image_uri     = "${var.account_id}.dkr.ecr.${var.region}.amazonaws.com/${var.image_name}:${var.image_tag}"
   role          = aws_iam_role.lambda_role.arn
+  # environment {
+  #   variables = {
+  #     "ROOT_PATH" = var.stage_name
+  #   }
+  # }
+  environment {
+    variables = var.lambda_env_vars
+  }
 }
 
 # IAM
 resource "aws_iam_role" "lambda_role" {
-  name = "fake-data-api-role"
+  name = "${var.app_name}-role"
   path = "/service-role/"
   assume_role_policy = <<POLICY
 {
@@ -55,57 +63,56 @@ resource "aws_iam_role_policy_attachment" "lambda_policy" {
 
 ##############################################################################
 # API Gateway setup
-# There are a TON of pieces to this
-# just to set up a proxy between
-# lambda and API Gateway.
-# The hierarchy is like this:
+# There are a TON of pieces to this just to set up a proxy between lambda and
+# API Gateway. The hierarchy is like this:
 #
-# @API
-# |- @Root Method -> @Root Integration -> {Lambda}
-# |  @Root Method Response <- @Root Integration Response <- {Lambda}
+# @API (Root Resource)
+# |---- {Client} -> @Root Method           -> @Root Integration           -> {Lambda}
+# |     {Client} <- @Root Method Response  <- @Root Integration Response  <- {Lambda}
 # `- @Proxy Resource
-#    `- @Proxy Method -> @Proxy Integration -> {Lambda}
-#       @Proxy Method Response <- @Proxy Integration Response <- {Lambda}
+#    `- {Client} -> @Proxy Method          -> @Proxy Integration          -> {Lambda}
+#       {Client} <- @Proxy Method Response <- @Proxy Integration Response <- {Lambda}
 #
-# Then finally the IAM to allow API Gateway to invoke the Lambda
+# Then finally the IAM to allow API Gateway to invoke the Lambda and the @Stage
+# that needs a @Deployment for the API to go live.
 ##############################################################################
 
 # Rest API
-resource "aws_api_gateway_rest_api" "fake_data" {
-  name        = "fake-data-api"
-  description = "A fake data api on lambda."
+resource "aws_api_gateway_rest_api" "rest_api" {
+  name        = var.app_name
+  description = "An api on top of AWS Lambda."
 }
 
 # Proxy Resource
-resource "aws_api_gateway_resource" "fake_data_proxy" {
-  rest_api_id = aws_api_gateway_rest_api.fake_data.id
-  parent_id   = aws_api_gateway_rest_api.fake_data.root_resource_id
+resource "aws_api_gateway_resource" "resource_proxy" {
+  rest_api_id = aws_api_gateway_rest_api.rest_api.id
+  parent_id   = aws_api_gateway_rest_api.rest_api.root_resource_id
   path_part   = "{proxy+}"
 }
 
 # Root Methods/Integrations :: Client towards Lambda
-resource "aws_api_gateway_method" "fake_data" {
-  rest_api_id   = aws_api_gateway_rest_api.fake_data.id
-  resource_id   = aws_api_gateway_rest_api.fake_data.root_resource_id
+resource "aws_api_gateway_method" "method" {
+  rest_api_id   = aws_api_gateway_rest_api.rest_api.id
+  resource_id   = aws_api_gateway_rest_api.rest_api.root_resource_id
   http_method   = "ANY"
   authorization = "NONE"
 }
 
-resource "aws_api_gateway_integration" "fake_data" {
-  rest_api_id             = aws_api_gateway_rest_api.fake_data.id
-  resource_id             = aws_api_gateway_rest_api.fake_data.root_resource_id
-  http_method             = aws_api_gateway_method.fake_data.http_method
+resource "aws_api_gateway_integration" "integration" {
+  rest_api_id             = aws_api_gateway_rest_api.rest_api.id
+  resource_id             = aws_api_gateway_rest_api.rest_api.root_resource_id
+  http_method             = aws_api_gateway_method.method.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.fake_data.invoke_arn
+  uri                     = aws_lambda_function.lambda_function.invoke_arn
   content_handling        = "CONVERT_TO_TEXT"
 }
 
 # Root Method/Integrtation Responses :: Lambda towards Client
-resource "aws_api_gateway_method_response" "fake_data" {
-  rest_api_id = aws_api_gateway_rest_api.fake_data.id
-  resource_id = aws_api_gateway_rest_api.fake_data.root_resource_id
-  http_method = aws_api_gateway_method.fake_data.http_method
+resource "aws_api_gateway_method_response" "method_response" {
+  rest_api_id = aws_api_gateway_rest_api.rest_api.id
+  resource_id = aws_api_gateway_rest_api.rest_api.root_resource_id
+  http_method = aws_api_gateway_method.method.http_method
   status_code = "200"
 
   response_models = {
@@ -113,25 +120,25 @@ resource "aws_api_gateway_method_response" "fake_data" {
   }
 }
 
-resource "aws_api_gateway_integration_response" "fake_data" {
-   rest_api_id = aws_api_gateway_rest_api.fake_data.id
-   resource_id = aws_api_gateway_rest_api.fake_data.root_resource_id
-   http_method = aws_api_gateway_method.fake_data.http_method
-   status_code = aws_api_gateway_method_response.fake_data.status_code
+resource "aws_api_gateway_integration_response" "integration_response" {
+   rest_api_id = aws_api_gateway_rest_api.rest_api.id
+   resource_id = aws_api_gateway_rest_api.rest_api.root_resource_id
+   http_method = aws_api_gateway_method.method.http_method
+   status_code = aws_api_gateway_method_response.method_response.status_code
 
    response_templates = {
        "application/json" = ""
    }
 
   depends_on = [
-    aws_api_gateway_integration.fake_data
+    aws_api_gateway_integration.integration
   ]
 }
 
 # Proxy Methods/Integrations :: Client towards Lambda
-resource "aws_api_gateway_method" "fake_data_proxy" {
-  rest_api_id   = aws_api_gateway_rest_api.fake_data.id
-  resource_id   = aws_api_gateway_resource.fake_data_proxy.id
+resource "aws_api_gateway_method" "proxy_method" {
+  rest_api_id   = aws_api_gateway_rest_api.rest_api.id
+  resource_id   = aws_api_gateway_resource.resource_proxy.id
   http_method   = "ANY"
   authorization = "NONE"
 
@@ -140,13 +147,13 @@ resource "aws_api_gateway_method" "fake_data_proxy" {
   }
 }
 
-resource "aws_api_gateway_integration" "fake_data_proxy" {
-  rest_api_id             = aws_api_gateway_rest_api.fake_data.id
-  resource_id             = aws_api_gateway_resource.fake_data_proxy.id
-  http_method             = aws_api_gateway_method.fake_data_proxy.http_method
+resource "aws_api_gateway_integration" "proxy_integration" {
+  rest_api_id             = aws_api_gateway_rest_api.rest_api.id
+  resource_id             = aws_api_gateway_resource.resource_proxy.id
+  http_method             = aws_api_gateway_method.proxy_method.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.fake_data.invoke_arn
+  uri                     = aws_lambda_function.lambda_function.invoke_arn
   content_handling        = "CONVERT_TO_TEXT"
   cache_key_parameters    = [
     "method.request.path.proxy"
@@ -154,10 +161,10 @@ resource "aws_api_gateway_integration" "fake_data_proxy" {
 }
 
 # Proxy Method/Integrtation Responses :: Lambda towards Client
-resource "aws_api_gateway_method_response" "fake_data_proxy" {
-  rest_api_id = aws_api_gateway_rest_api.fake_data.id
-  resource_id = aws_api_gateway_resource.fake_data_proxy.id
-  http_method = aws_api_gateway_method.fake_data_proxy.http_method
+resource "aws_api_gateway_method_response" "proxy_method_response" {
+  rest_api_id = aws_api_gateway_rest_api.rest_api.id
+  resource_id = aws_api_gateway_resource.resource_proxy.id
+  http_method = aws_api_gateway_method.proxy_method.http_method
   status_code = "200"
 
   response_models = {
@@ -165,50 +172,50 @@ resource "aws_api_gateway_method_response" "fake_data_proxy" {
   }
 }
 
-resource "aws_api_gateway_integration_response" "fake_data_proxy" {
-  rest_api_id = aws_api_gateway_rest_api.fake_data.id
-  resource_id = aws_api_gateway_resource.fake_data_proxy.id
-  http_method = aws_api_gateway_method.fake_data_proxy.http_method
-  status_code = aws_api_gateway_method_response.fake_data_proxy.status_code
+resource "aws_api_gateway_integration_response" "proxy_integration_response" {
+  rest_api_id = aws_api_gateway_rest_api.rest_api.id
+  resource_id = aws_api_gateway_resource.resource_proxy.id
+  http_method = aws_api_gateway_method.proxy_method.http_method
+  status_code = aws_api_gateway_method_response.proxy_method_response.status_code
 
   response_templates = {
     "application/json" = ""
   }
 
   depends_on = [
-    aws_api_gateway_integration.fake_data_proxy
+    aws_api_gateway_integration.proxy_integration
   ]
 }
 
 # Stage
-resource "aws_api_gateway_stage" "fake_data" {
-  rest_api_id   = aws_api_gateway_rest_api.fake_data.id
-  stage_name    = "v0"
-  deployment_id = aws_api_gateway_deployment.fake_data.id
-  description   = "lambda api on container image"
+resource "aws_api_gateway_stage" "stage" {
+  rest_api_id   = aws_api_gateway_rest_api.rest_api.id
+  stage_name    = var.stage_name
+  deployment_id = aws_api_gateway_deployment.deployment.id
+  description   = "AWS Lambda api on ECR container image"
 }
 
 # Deployment
-resource "aws_api_gateway_deployment" "fake_data" {
-  rest_api_id = aws_api_gateway_rest_api.fake_data.id
+resource "aws_api_gateway_deployment" "deployment" {
+  rest_api_id = aws_api_gateway_rest_api.rest_api.id
   triggers    = {
-    redeployment = sha1(jsonencode(aws_api_gateway_rest_api.fake_data.body))
+    redeployment = sha1(jsonencode(aws_api_gateway_rest_api.rest_api.body))
   }
   lifecycle {
     create_before_destroy = true
   }
   depends_on = [
-    aws_api_gateway_integration.fake_data,
-    aws_api_gateway_integration.fake_data_proxy,
+    aws_api_gateway_integration.integration,
+    aws_api_gateway_integration.proxy_integration,
   ]
 }
 
 # Allow API Gateway to invoke the Lambda
 resource "aws_lambda_permission" "gateway_invoke_lambda" {
-  statement_id  = "APIGatewayInvokeFakeDataLambda"
+  statement_id  = "APIGatewayInvoke${var.app_name}Lambda"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.fake_data.arn
+  function_name = aws_lambda_function.lambda_function.arn
   principal     = "apigateway.amazonaws.com"
 
-  source_arn = "${aws_api_gateway_rest_api.fake_data.execution_arn}/*/*/*"
+  source_arn = "${aws_api_gateway_rest_api.rest_api.execution_arn}/*/*/*"
 }
