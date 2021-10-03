@@ -14,6 +14,11 @@ terraform {
 
 provider "aws" {
   region = var.region
+  default_tags {
+    tags = {
+      environment = var.environment
+    }
+  }
 }
 
 ######################################
@@ -26,11 +31,7 @@ resource "aws_lambda_function" "lambda_function" {
   package_type  = "Image"
   image_uri     = "${var.account_id}.dkr.ecr.${var.region}.amazonaws.com/${var.image_name}:${var.image_tag}"
   role          = aws_iam_role.lambda_role.arn
-  # environment {
-  #   variables = {
-  #     "ROOT_PATH" = var.stage_name
-  #   }
-  # }
+
   environment {
     variables = var.lambda_env_vars
   }
