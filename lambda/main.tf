@@ -76,6 +76,9 @@ resource "aws_iam_role_policy_attachment" "lambda_policy" {
 #
 # Then finally the IAM to allow API Gateway to invoke the Lambda and the @Stage
 # that needs a @Deployment for the API to go live.
+#
+# Additionally there is an API Key which is the default auth mechanism in this
+# module. You can edit the module to use some other auth mechanism.
 ##############################################################################
 
 # Rest API
@@ -219,4 +222,30 @@ resource "aws_lambda_permission" "gateway_invoke_lambda" {
   principal     = "apigateway.amazonaws.com"
 
   source_arn = "${aws_api_gateway_rest_api.rest_api.execution_arn}/*/*/*"
+}
+
+###### Testing adding an API Key ######
+
+resource "aws_api_gateway_api_key" "api_key" {
+  name = "${var.app_name}APIKey"
+}
+
+resource "aws_api_gateway_usage_plan" "usage_plan" {
+  name         = "${var.app_name}UsagePlan"
+  description  = "The usage plan for the lambda API."
+
+  api_stages {
+    api_id = aws_api_gateway_rest_api.rest_api.id
+    stage  = aws_api_gateway_stage.stage.stage_name
+  }
+
+  quota_settings {
+    limit  = 1000000
+    period = "MONTH"
+  }
+
+  throttle_settings {
+    burst_limit = 1000
+    rate_limit  = 1000
+  }
 }
